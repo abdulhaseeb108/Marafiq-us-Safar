@@ -6,6 +6,8 @@ import Hotel from "./models/Hotel.js";
 import Snapshot from "./models/Snapshot.js";
 import { calculate } from "./engine/calculate.js";
 import { getNightlySeasons } from "./engine/seasons.js";
+import Lead from "./models/Lead.js";
+import Counter from "./models/Counter.js";
 
 const app = express();
 app.use(cors());
@@ -60,19 +62,81 @@ app.post("/api/calculate", async (req, res) => {
       adults, children, infants, roomType, makkahSeasons, madinahSeasons,
     });
 
+        const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+    // Live previews are not saved
+    if (req.body.preview) {
+      return res.json({ ...result, expiresAt });
+    }
+
     const snapshot = await Snapshot.create({
       inputs: req.body,
       result,
-      expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+      expiresAt,
     });
 
-    res.json({ ...result, snapshotId: snapshot._id, expiresAt: snapshot.expiresAt });
-  } catch (err) {
+    res.json({ ...result, snapshotId: snapshot._id, expiresAt });
+   }
+    catch (err) {
     console.error(err);
     res.status(400).json({ error: err.message });
   }
 });
+async function nextReference() {
+  const now = new Date();
+  const yymm =
+    String(now.getUTCFullYear()).slice(2) +
+    String(now.getUTCMonth() + 1).padStart(2, "0");
+  const counter = await Counter.findByIdAndUpdate(
+    yymm,
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true }
+  );
+  return `MUS-${yymm}-${String(counter.seq).padStart(4, "0")}`;
+}
 
+app.post("/api/leads", async (req, res) => {
+  try {
+    const { snapshotId, name, phone, note, consent } = req.body;
+
+    if (!snapshotId || !name?.trim() || !phone?.trim()) {
+      return res.status(400).json({ error: "Name and phone are required." });
+    }
+    if (consent !== true) {
+      return res.status(400).json({ error: "Please tick the consent box." });
+    }
+    if (!/^[+0-9\s-]{9,16}$/.test(phone.trim())) {
+      return res.status(400).json({ error: "Please enter a valid phone number." });
+    }
+
+    const snapshot = await Snapshot.findById(snapshotId);
+    if (!snapshot) {
+      return res.status(400).json({ error: "Estimate not found. Please calculate again." });
+    }
+
+    // Duplicate submit: return the existing request
+    const existing = await Lead.findOne({ snapshotId });
+    if (existing) {
+      return res.json({ referenceNo: existing.referenceNo, duplicate: true });
+    }
+
+    const lead = await Lead.create({
+      referenceNo: await nextReference(),
+      snapshotId,
+      name: name.trim(),
+      phone: phone.trim(),
+      note: note?.trim().slice(0, 500),
+      consent: true,
+      consentAt: new Date(),
+    });
+
+    console.log("NEW LEAD:", lead.referenceNo, lead.name);
+    res.json({ referenceNo: lead.referenceNo, duplicate: false });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Could not save your request. Please try again." });
+  }
+});
 const PORT = 4000;
 await connectDb();
 app.listen(PORT, () => {
