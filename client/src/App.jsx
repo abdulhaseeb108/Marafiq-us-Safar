@@ -1,119 +1,402 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import SiteHeader from "./components/SiteHeader.jsx";
+import HomePage from "./components/HomePage.jsx";
+import ComingSoonPage from "./components/ComingSoonPage.jsx";
+import UmrahWizard from "./components/UmrahWizard.jsx";
+import NotFoundPage from "./components/NotFoundPage.jsx";
+import { LeadForm, RequestConfirmation } from "./components/LeadForm.jsx";
 import {
-  Users, Building2, CalendarDays, Send, Check, User, UserRound, Baby,
-  BedDouble, Plane, Package, Lock, Globe, Info, ReceiptText, FilePenLine, Headset,
-  Moon, Minus, Plus,
-} from "lucide-react";
-import { Logo, Lantern, Kaaba, Skyline, WhatsAppIcon } from "./art.jsx";
-
-const API = "http://localhost:4000";
-const WHATSAPP_NUMBER = "923000000000"; // CHANGE to your business number
-const fmt = (n) => Number(n).toLocaleString("en-US");
-const STEPS = [
-  [Users, "Travellers", "Who is going?"],
-  [Building2, "Hotels", "Where will you stay?"],
-  [CalendarDays, "Dates", "When will you travel?"],
-  [Send, "Request", "Get your quotation"],
-];
-
-function addDays(dateStr, n) {
-  const d = new Date(dateStr + "T00:00:00Z");
-  d.setUTCDate(d.getUTCDate() + n);
-  return d;
-}
-const showDate = (d) =>
-  d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-
-function Counter({ value, onChange, min = 0, max = 30, label }) {
-  return (
-    <div className="ctl">
-      <button type="button" className="rb" aria-label={`Fewer ${label}`} disabled={value <= min}
-        onClick={() => onChange(value - 1)}><Minus size={16} /></button>
-      <div className="val" style={{ textAlign: "center" }}>{value}</div>
-      <button type="button" className="rb" aria-label={`More ${label}`} disabled={value >= max}
-        onClick={() => onChange(value + 1)}><Plus size={16} /></button>
-    </div>
-  );
-}
+  API, EMPTY_HOTELS, FIRST_DAY, JSON_H, LAST_DAY, ROOM_NAME, ROUTES, TRANSPORTS, WHATSAPP_NUMBER,
+} from "./data/calculator.jsx";
+import { APP_PATHS, resolvePage } from "./routes.js";
+import { allocateRoomBeds, fmt, planStays, plural, showDate, validDate } from "./utils/travel.js";
 
 export default function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const page = resolvePage(location.pathname);
+  const mode = page === "umrah" || page === "calculator"
+    ? "umrah"
+    : page === "home"
+      ? null
+      : "other";
+  const [bookingDays, setBookingDays] = useState(10);
+  const [bookingPassengers, setBookingPassengers] = useState(1);
+  const [bookingRoom, setBookingRoom] = useState("");
+  const [bookingDeparture, setBookingDeparture] = useState("");
+  const [customDeparture, setCustomDeparture] = useState("");
   const [step, setStep] = useState(0);
-  const [hotels, setHotels] = useState([]);
+  const [showErrors, setShowErrors] = useState(false);
+  const [hotelLoad, setHotelLoad] = useState({ key: "", status: "idle", hotels: EMPTY_HOTELS });
   const [form, setForm] = useState({
-    adults: 4, children: 0, infants: 0, roomType: 4,
-    startDate: "2026-11-10", makkahNights: 7, madinahNights: 5,
-    makkahHotelId: "", madinahHotelId: "",
+    adults: 1,
+    children: 0,
+    infants: 0,
+    infantBed: "",
+    roomType: null,
+    primaryRoomCount: 1,
+    additionalRoomType: 4,
+    startDate: "",
+    departureCity: "",
+    transport: "bus",
+    route: "",
+    customRoute: "",
+    makkahNights: 4,
+    madinahNights: 3,
+    makkahHotelId: "",
+    madinahHotelId: "",
+    ziyarat: [],
   });
-  const [result, setResult] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
+  const [estimate, setEstimate] = useState({ key: "", result: null, error: "" });
   const [lead, setLead] = useState({ name: "", phone: "", note: "", consent: false });
   const [sent, setSent] = useState(null);
   const [leadError, setLeadError] = useState("");
   const [sending, setSending] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState("");
+  const [sumOpen, setSumOpen] = useState(false);
+
+  const headingRef = useRef(null);
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    headingRef.current?.focus();
+  }, [step, mode, location.pathname]);
+
+  // Route changes clear stale confirmation state and reset the Umrah wizard when entered.
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
+    setSent(null);
+    setLeadError("");
+    if (page === "umrah" || page === "calculator") {
+      setStep(0);
+      setShowErrors(false);
+      setSumOpen(false);
+    }
+  }, [page]);
 
   useEffect(() => {
-    fetch(`${API}/api/hotels`)
-      .then((r) => r.json())
-      .then((list) => {
-        setHotels(list);
-        const mk = list.find((h) => h.city === "makkah");
-        const md = list.find((h) => h.city === "madinah");
-        setForm((f) => ({ ...f, makkahHotelId: mk?._id || "", madinahHotelId: md?._id || "" }));
-      })
-      .catch(() => setError("Cannot reach the server. Is it running?"));
-  }, []);
+    const pageTitles = {
+      home: "Marafiq us Safar | Your Journey Partner",
+      umrah: "Umrah Packages | Marafiq us Safar",
+      calculator: "Umrah Package Calculator | Marafiq us Safar",
+      hajj: "Hajj Journeys Coming Soon | Marafiq us Safar",
+      tours: "Guided Tours Coming Soon | Marafiq us Safar",
+      flights: "Flight Bookings Coming Soon | Marafiq us Safar",
+      visa: "Visa Assistance Coming Soon | Marafiq us Safar",
+      "not-found": "Page Not Found | Marafiq us Safar",
+    };
+    document.title = pageTitles[page] || pageTitles["not-found"];
+  }, [page]);
 
-  // Live estimate (preview only, not saved)
+  const updateForm = (patch) => {
+    setSent(null);
+    setForm((current) => {
+      const next = { ...current, ...patch };
+      if (next.infants === 0 && next.children === 0) next.infantBed = "";
+      const roomType = Number(next.roomType);
+      const roomOccupants = next.adults + next.children + (next.infantBed === "required" ? next.infants : 0);
+      if ([2, 3, 4].includes(roomType)) {
+        const maxPrimaryRooms = Math.max(1, Math.floor(roomOccupants / roomType));
+        next.primaryRoomCount = Math.min(Math.max(1, next.primaryRoomCount), maxPrimaryRooms);
+      }
+      return next;
+    });
+  };
+  const plan = validDate(form.startDate) ? planStays(form) : null;
+  const inRange = validDate(form.startDate) && form.startDate >= FIRST_DAY && form.startDate <= LAST_DAY;
+  const makkahIn = plan?.stays.makkah.checkIn;
+  const madinahIn = plan?.stays.madinah.checkIn;
+  const hotelRequestKey = mode === "umrah" && inRange && makkahIn && madinahIn
+    ? `${makkahIn}|${madinahIn}`
+    : "";
+  const hotels = hotelLoad.key === hotelRequestKey && hotelRequestKey
+    ? hotelLoad.hotels
+    : EMPTY_HOTELS;
+  const hotelStatus = !hotelRequestKey
+    ? "idle"
+    : hotelLoad.key === hotelRequestKey
+      ? hotelLoad.status
+      : "loading";
+
   useEffect(() => {
-    if (!form.makkahHotelId || !form.madinahHotelId || !form.startDate) return;
+    if (!hotelRequestKey) return undefined;
     let cancelled = false;
-    setBusy(true);
+    Promise.all([
+      fetch(`${API}/api/hotels?city=makkah&date=${makkahIn}`).then((response) => {
+        if (!response.ok) throw new Error("Could not load Makkah hotels.");
+        return response.json();
+      }),
+      fetch(`${API}/api/hotels?city=madinah&date=${madinahIn}`).then((response) => {
+        if (!response.ok) throw new Error("Could not load Madinah hotels.");
+        return response.json();
+      }),
+    ])
+      .then(([makkahHotels, madinahHotels]) => {
+        if (cancelled) return;
+        if (!Array.isArray(makkahHotels) || !Array.isArray(madinahHotels)) {
+          throw new Error("Hotel response was invalid.");
+        }
+        setHotelLoad({
+          key: hotelRequestKey,
+          status: "ready",
+          hotels: { makkah: makkahHotels, madinah: madinahHotels },
+        });
+        const isSelectable = (list, id) => list.some((hotel) =>
+          hotel._id === id && !hotel.onRequest && !hotel.noRate);
+        setForm((current) => ({
+          ...current,
+          makkahHotelId: isSelectable(makkahHotels, current.makkahHotelId) ? current.makkahHotelId : "",
+          madinahHotelId: isSelectable(madinahHotels, current.madinahHotelId) ? current.madinahHotelId : "",
+        }));
+      })
+      .catch(() => {
+        if (!cancelled) setHotelLoad({ key: hotelRequestKey, status: "error", hotels: EMPTY_HOTELS });
+      });
+    return () => { cancelled = true; };
+  }, [hotelRequestKey, makkahIn, madinahIn]);
+
+  const roomOccupants = form.adults + form.children + (form.infantBed === "required" ? form.infants : 0);
+  const quoteReasons = [
+    form.roomType === 5 && "Quint supplier rates have not been added yet.",
+    form.infants > 0 && form.infantBed === "required" && "An infant bed rate has not been added yet.",
+    ["route3", "route4", "custom"].includes(form.route) &&
+      "This itinerary needs a visit-by-visit hotel and transport quote from our team.",
+  ].filter(Boolean);
+  const quoteOnly = quoteReasons.length > 0;
+  const roomAllocations = allocateRoomBeds(
+    roomOccupants,
+    form.roomType,
+    form.primaryRoomCount,
+    form.additionalRoomType,
+    form.children > 2 ? 2 : 1
+  );
+  const canCalculate = mode === "umrah" && !quoteOnly && Boolean(
+    plan && inRange && form.route && form.roomType && form.makkahHotelId && form.madinahHotelId &&
+    form.infants <= form.adults
+  );
+  const estimatePayload = JSON.stringify({
+    ...form,
+    ...(form.roomType !== "sharing" ? { roomAllocations } : {}),
+    preview: true,
+  });
+  const currentEstimate = canCalculate && estimate.key === estimatePayload ? estimate : null;
+  const result = currentEstimate?.result ?? null;
+  const calcError = currentEstimate?.error ?? "";
+  const busy = canCalculate && !currentEstimate;
+
+  useEffect(() => {
+    if (!canCalculate) return undefined;
+    let cancelled = false;
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`${API}/api/calculate`, {
+        const response = await fetch(`${API}/api/calculate`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...form, preview: true }),
+          headers: JSON_H,
+          body: estimatePayload,
         });
-        const data = await res.json();
+        const data = await response.json();
         if (cancelled) return;
-        if (!res.ok) { setError(data.error || "Something went wrong"); setResult(null); }
-        else { setError(""); setResult(data); }
+        setEstimate({
+          key: estimatePayload,
+          result: response.ok ? data : null,
+          error: response.ok ? "" : data.error || "Something went wrong",
+        });
       } catch {
-        if (!cancelled) setError("Cannot reach the server. Is it running?");
-      } finally {
-        if (!cancelled) setBusy(false);
+        if (!cancelled) {
+          setEstimate({
+            key: estimatePayload,
+            result: null,
+            error: "Cannot reach the server. Is it running?",
+          });
+        }
       }
-    }, 500);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [form]);
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [canCalculate, estimatePayload]);
 
-  const set = (name) => (value) => {
-    setSent(null);
-    setForm((f) => ({ ...f, [name]: value }));
+  function stepErrors(index) {
+    const errors = {};
+    if (index === 0) {
+      if (!Number.isInteger(form.adults) || form.adults < 1 || form.adults > 30) {
+        errors.adults = "Enter between 1 and 30 adults.";
+      }
+      if (form.infants > form.adults) {
+        errors.infants = "Each infant needs an adult. Reduce the infants or add an adult.";
+      }
+      if (!Number.isInteger(form.children) || form.children < 0 || form.children > 30) {
+        errors.children = "Enter between 0 and 30 children.";
+      }
+      if ((form.infants > 0 || form.children > 0) && !form.infantBed) {
+        errors.infantBed = "Choose whether infants and children need a separate mattress.";
+      }
+      if (!form.roomType) errors.roomType = "Select a room type to continue.";
+      if (!validDate(form.startDate)) errors.date = "Choose your arrival date.";
+      else if (!inRange) {
+        errors.date = `We have supplier rates for nights from ${showDate(FIRST_DAY)} to ${showDate(LAST_DAY)}. Choose an arrival date in that range.`;
+      }
+    }
+    if (index === 1 && !form.makkahHotelId) errors.hotel = "Select a hotel in Makkah to continue.";
+    if (index === 2 && !form.madinahHotelId) errors.hotel = "Select a hotel in Madinah to continue.";
+    if (index === 3) {
+      if (!form.route) errors.route = "Choose a route to continue.";
+      if (form.route === "custom" && !form.customRoute.trim()) {
+        errors.customRoute = "Enter your preferred itinerary.";
+      }
+    }
+    return errors;
+  }
+  const hasErrors = (index) => Object.keys(stepErrors(index)).length > 0;
+  const canReach = (target) => {
+    for (let index = 0; index < target; index += 1) {
+      if (hasErrors(index)) return false;
+    }
+    return true;
   };
-  const setText = (e) => set(e.target.name)(e.target.value);
+  const errors = showErrors ? stepErrors(step) : {};
 
-  async function submitLead(e) {
-    e.preventDefault();
+  function next() {
+    if (hasErrors(step)) {
+      setShowErrors(true);
+      return;
+    }
+    if (step === 4) {
+      const incompleteStep = [1, 2].find(hasErrors);
+      if (incompleteStep !== undefined) {
+        setShowErrors(true);
+        setStep(incompleteStep);
+        return;
+      }
+    }
+    setShowErrors(false);
+    setStep((current) => Math.min(5, current + 1));
+  }
+  function back() {
+    setShowErrors(false);
+    setStep((current) => Math.max(0, current - 1));
+  }
+  function goToStep(index) {
+    if (index <= step || canReach(index)) {
+      setShowErrors(false);
+      setStep(index);
+    }
+  }
+
+  async function downloadPdf() {
+    setPdfBusy(true);
+    setPdfError("");
+    try {
+      const response = await fetch(`${API}/api/estimate-pdf`, {
+        method: "POST",
+        headers: JSON_H,
+        body: JSON.stringify({ ...form, roomAllocations, routeText: route.text, referenceNo: sent }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Could not create the PDF.");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "umrah-estimate.pdf";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setPdfError(error.message === "Failed to fetch"
+        ? "Cannot reach the server. Is it running?"
+        : error.message);
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
+  async function submitLead(event) {
+    event.preventDefault();
     setLeadError("");
+    if (mode !== "umrah") {
+      setLeadError("Enquiries are currently available for Umrah packages only.");
+      return;
+    }
     setSending(true);
     try {
-      const calc = await fetch(`${API}/api/calculate`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      const saved = await calc.json();
-      if (!calc.ok) return setLeadError(saved.error || "Something went wrong");
-
-      const res = await fetch(`${API}/api/leads`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...lead, snapshotId: saved.snapshotId }),
-      });
-      const data = await res.json();
-      if (!res.ok) return setLeadError(data.error || "Something went wrong");
+      let response;
+      if (quoteOnly) {
+        const note = [
+          `Route: ${route.text}`,
+          `Transport: ${transport.name}`,
+          `Room preference: ${ROOM_NAME[form.roomType] || "Not selected"}`,
+          form.children > 2 && "More than two children: an additional room is required.",
+          roomAllocations.length > 0 && `Room allocation: ${roomAllocations.join(" + ")} bed(s) per room`,
+          `Infant/child mattress: ${form.infants + form.children === 0 ? "Not applicable" : form.infantBed === "required" ? "Required" : form.infantBed === "none" ? "Not required" : "Preference not selected"}`,
+          `Makkah: ${form.makkahNights} total night(s)${form.route === "route3" || form.route === "route4" ? "; nights per visit to be confirmed" : ""}`,
+          `Madinah: ${form.madinahNights} night(s)`,
+          `Ziyarat requested: ${form.ziyarat.length ? form.ziyarat.join(", ") : "None"}`,
+          `Makkah hotel: ${nameOf("makkah") || "Not selected"}`,
+          `Madinah hotel: ${nameOf("madinah") || "Not selected"}`,
+          lead.note,
+        ].filter(Boolean).join("\n");
+        response = await fetch(`${API}/api/enquiries`, {
+          method: "POST",
+          headers: JSON_H,
+          body: JSON.stringify({
+            ...lead,
+            destination: "Umrah package",
+            tripType: "Umrah",
+            adults: form.adults,
+            children: form.children,
+            infants: form.infants,
+            startDate: form.startDate,
+            nights: form.makkahNights + form.madinahNights,
+            departureCity: form.departureCity,
+            services: ["Hotels", "Visa assistance", "Ground transport"],
+            route: form.route,
+            routeText: route.text,
+            customRoute: form.customRoute,
+            routeSegments: ROUTES[form.route].order.map((city, index) => ({ city, visit: index + 1 })),
+            transport: form.transport,
+            roomType: form.roomType,
+            roomAllocations,
+            makkahNights: form.makkahNights,
+            madinahNights: form.madinahNights,
+            ziyarat: form.ziyarat,
+            infantBed: form.infants > 0 || form.children > 0 ? form.infantBed : "none",
+            note,
+          }),
+        });
+      } else {
+        const calculation = await fetch(`${API}/api/calculate`, {
+          method: "POST",
+          headers: JSON_H,
+          body: JSON.stringify({
+            ...form,
+            ...(form.roomType !== "sharing" ? { roomAllocations } : {}),
+          }),
+        });
+        const saved = await calculation.json();
+        if (!calculation.ok) {
+          setLeadError(saved.error || "Something went wrong");
+          return;
+        }
+        response = await fetch(`${API}/api/leads`, {
+          method: "POST",
+          headers: JSON_H,
+          body: JSON.stringify({ ...lead, snapshotId: saved.snapshotId }),
+        });
+      }
+      const data = await response.json();
+      if (!response.ok) {
+        setLeadError(data.error || "Something went wrong");
+        return;
+      }
       setSent(data.referenceNo);
     } catch {
       setLeadError("Cannot reach the server. Is it running?");
@@ -122,321 +405,159 @@ export default function App() {
     }
   }
 
-  const travellers = form.adults + form.children + form.infants;
-  const makkahHotel = hotels.find((h) => h._id === form.makkahHotelId);
-  const madinahHotel = hotels.find((h) => h._id === form.madinahHotelId);
-  const makkahOut = addDays(form.startDate, form.makkahNights);
-  const madinahOut = addDays(form.startDate, form.makkahNights + form.madinahNights);
+  const nameOf = (city) => hotels[city].find((hotel) =>
+    hotel._id === form[`${city}HotelId`])?.name;
+  const transport = TRANSPORTS.find((item) => item.id === form.transport);
+  const fxSarToPkr = result?.fxSarToPkr ||
+    hotels.makkah[0]?.fxSarToPkr ||
+    hotels.madinah[0]?.fxSarToPkr;
+  const selectedRoute = ROUTES[form.route] || ROUTES.route2;
+  const route = !form.route
+    ? { ...selectedRoute, title: "", text: "Not selected" }
+    : form.route === "custom"
+      ? { ...selectedRoute, title: "Custom Route", text: form.customRoute || selectedRoute.text }
+      : selectedRoute;
+  const totalText = result ? `PKR ${fmt(result.totalPkr)} to ${fmt(result.highPkr)}` : "Not yet priced";
+  const liveMessage = result && !busy ? `Estimate updated: ${totalText}` : "";
 
-  const waText = result
-    ? `Assalamu alaikum. I would like a confirmed quote for Umrah.\n` +
-      `${travellers} travellers, ${form.makkahNights} nights Makkah, ${form.madinahNights} nights Madinah.\n` +
-      `Estimate: PKR ${fmt(result.totalPkr)} - ${fmt(result.highPkr)}` +
-      (sent ? `\nReference: ${sent}` : "")
-    : "Assalamu alaikum. I would like to plan an Umrah trip.";
-  const waLink = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(waText)}`;
+  let message = "Assalamu alaikum. I would like to plan a trip.";
+  if (mode === "umrah" && result) {
+    message = `Assalamu alaikum. I would like a confirmed quote for Umrah.\n` +
+      `${plural(form.adults, "adult")}${form.children ? `, ${plural(form.children, "child")}` : ""}${form.infants ? `, ${plural(form.infants, "infant")}` : ""}, ${route.text}, ` +
+      `${showDate(form.startDate)} to ${showDate(plan.end)}.\nEstimate: ${totalText}` +
+      (sent ? `\nReference: ${sent}` : "");
+  } else if (mode === "umrah" && quoteOnly) {
+    message = `Assalamu alaikum. I would like a confirmed Umrah package quote.\n` +
+      `${plural(form.adults, "adult")}${form.children ? `, ${plural(form.children, "child")}` : ""}${form.infants ? `, ${plural(form.infants, "infant")}` : ""}, ${route.text}.` +
+      (sent ? `\nReference: ${sent}` : "");
+  }
+  const waLink = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
+  const selectedDeparture = bookingDeparture === "Other" ? customDeparture.trim() : bookingDeparture;
 
-  const hotelSelect = (city, name) => (
-    <div className="field">
-      <label className="lab"><Building2 />Hotel</label>
-      <select name={name} value={form[name]} onChange={setText}>
-        {hotels.filter((h) => h.city === city).map((h) => (
-          <option key={h._id} value={h._id}>{h.name} · {h.distanceM} m from the Haram</option>
-        ))}
-      </select>
-    </div>
+  function openService(service) {
+    setSent(null);
+    setLeadError("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (service === "umrah" || service === "calculator") {
+      setStep(0);
+      navigate(APP_PATHS[service]);
+      return;
+    }
+    const path = APP_PATHS[service];
+    if (!path) {
+      throw new Error(`Unknown travel service: ${service}`);
+    }
+    navigate(path);
+  }
+
+  function searchPackages(event) {
+    event.preventDefault();
+    openService("umrah");
+
+    const totalNights = bookingDays - 1;
+    const makkahNights = Math.ceil(totalNights * 0.55);
+    setForm((current) => ({
+      ...current,
+      adults: bookingPassengers,
+      roomType: bookingRoom ? (bookingRoom === "sharing" ? "sharing" : Number(bookingRoom)) : null,
+      departureCity: selectedDeparture,
+      makkahNights,
+      madinahNights: totalNights - makkahNights,
+      makkahHotelId: "",
+      madinahHotelId: "",
+    }));
+  }
+
+  const leadForm = (
+    <LeadForm
+      lead={lead}
+      setLead={setLead}
+      onSubmit={submitLead}
+      error={leadError}
+      sending={sending}
+      disabled={mode === "umrah" && !result && !quoteOnly}
+    />
   );
-
-  const feeAndPackage = result
-    ? result.lineItems.filter((i) => i.label.startsWith("Package") || i.label.startsWith("Service"))
-    : [];
+  const doneBox = <RequestConfirmation reference={sent} waLink={waLink} />;
+  const homePage = (
+    <HomePage
+      bookingDays={bookingDays}
+      setBookingDays={setBookingDays}
+      bookingPassengers={bookingPassengers}
+      setBookingPassengers={setBookingPassengers}
+      bookingRoom={bookingRoom}
+      setBookingRoom={setBookingRoom}
+      bookingDeparture={bookingDeparture}
+      setBookingDeparture={setBookingDeparture}
+      customDeparture={customDeparture}
+      setCustomDeparture={setCustomDeparture}
+      onSearch={searchPackages}
+      onOpenService={openService}
+      waLink={waLink}
+    />
+  );
+  const comingSoonPage = (
+    <ComingSoonPage
+      service={page}
+      onHome={() => navigate(APP_PATHS.home)}
+      onUmrah={() => openService("umrah")}
+    />
+  );
+  const umrahWizard = (
+    <UmrahWizard
+      step={step}
+      form={form}
+      updateForm={updateForm}
+      errors={errors}
+      canReach={canReach}
+      plan={plan}
+      hotels={hotels}
+      hotelStatus={hotelStatus}
+      result={result}
+      calcError={calcError}
+      busy={busy}
+      onDownloadPdf={downloadPdf}
+      pdfBusy={pdfBusy}
+      pdfError={pdfError}
+      sent={sent}
+      doneBox={doneBox}
+      leadForm={leadForm}
+      headingRef={headingRef}
+      onHome={() => navigate(APP_PATHS.home)}
+      onBack={back}
+      onNext={next}
+      onGoToStep={goToStep}
+      nameOf={nameOf}
+      route={route}
+      transport={transport}
+      fxSarToPkr={fxSarToPkr}
+      totalText={totalText}
+      liveMessage={liveMessage}
+      sumOpen={sumOpen}
+      setSumOpen={setSumOpen}
+      inRange={inRange}
+      quoteOnly={quoteOnly}
+      quoteReason={quoteReasons.join(" ")}
+      roomAllocations={roomAllocations}
+    />
+  );
 
   return (
     <>
-      <div className="skyline-deco"><Skyline /></div>
-
-      <section className="hero">
-        <div className="hero-lantern"><Lantern /></div>
-
-        <nav className="nav">
-          <a className="logo" href="#top">
-            <Logo />
-            <span><b>Marafiq us Safar</b><small>Your Umrah journey partner</small></span>
-          </a>
-          <div className="links">
-            <a className="on" href="#top">Home</a>
-            <a href="#calculator">Umrah Calculator</a>
-            <a href="#about">About Us</a>
-            <a href="#contact">Contact</a>
-          </div>
-          <div className="nav-right">
-            <div className="lang-wrap">
-              <Globe />
-              <select className="lang" aria-label="Language" defaultValue="en">
-                <option value="en">English</option>
-                <option value="ur" disabled>اردو (coming soon)</option>
-              </select>
-            </div>
-            <span className="ar">مرافق السفر</span>
-          </div>
-        </nav>
-
-        <div className="hero-body" id="top">
-          <p className="kicker">Plan · Estimate · Request · Confirm</p>
-          <h1>Your Umrah Journey, <em>Simplified.</em></h1>
-          <p className="lede">
-            Get a personalised cost estimate for your Umrah trip, choose your hotels in
-            Makkah and Madinah, and request a confirmed quotation, all in one place.
-          </p>
-          <p className="hero-quote">{/* add a verified verse here */}</p>
-        </div>
-      </section>
-
-      <main className="stage" id="calculator">
-        {/* ---------- Wizard ---------- */}
-        <div className="wizard">
-          <div className="steps">
-            {STEPS.map(([Icon, name, sub], i) => (
-              <button key={name} type="button"
-                className={`stp ${i === step ? "on" : i < step ? "done" : ""}`}
-                onClick={() => setStep(i)}>
-                <span className="c">{i < step ? <Check /> : <Icon />}</span>
-                <span><b>{name}</b><small>{sub}</small></span>
-              </button>
-            ))}
-          </div>
-
-          {step === 0 && (
-            <div className="panel">
-              <h2>1. Travellers</h2>
-              <p className="sub">Tell us who is travelling and how many you will have in your group.</p>
-              <div className="tiles">
-                <div className="tile">
-                  <div className="t"><User /> Adults</div>
-                  <Counter label="adults" value={form.adults} min={1} onChange={set("adults")} />
-                  <div className="small">Ages 12+</div>
-                </div>
-                <div className="tile">
-                  <div className="t"><UserRound /> Children</div>
-                  <Counter label="children" value={form.children} onChange={set("children")} />
-                  <div className="small">Ages 2–11, priced as adults</div>
-                </div>
-                <div className="tile">
-                  <div className="t"><Baby /> Infants</div>
-                  <Counter label="infants" value={form.infants} onChange={set("infants")} />
-                  <div className="small">Under 2 years (no seat)</div>
-                </div>
-              </div>
-
-              <div className="two">
-                <div className="tile">
-                  <label className="lab"><CalendarDays />First night in Makkah</label>
-                  <input type="date" name="startDate" value={form.startDate} onChange={setText} />
-                </div>
-                <div className="tile">
-                  <label className="lab"><BedDouble />Guests per room</label>
-                  <div className="seg">
-                    {[[4, "Quad", "4 per room"], [3, "Triple", "3 per room"], [2, "Double", "2 per room"]].map(([v, n, s]) => (
-                      <button type="button" key={v} className={form.roomType === v ? "on" : ""}
-                        onClick={() => set("roomType")(v)}>{n}<small>{s}</small></button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {error && <div className="error">{error}</div>}
-              <div className="actions">
-                <button type="button" className="btn" onClick={() => setStep(1)}>Next: Choose Hotels →</button>
-              </div>
-              <p className="secure"><Lock />Your information is safe and secure</p>
-            </div>
-          )}
-
-          {step === 1 && (
-            <div className="panel">
-              <h2>2. Hotels</h2>
-              <p className="sub">Choose where you will stay in each city.</p>
-              <div className="block"><h3>Makkah</h3>{hotelSelect("makkah", "makkahHotelId")}</div>
-              <div className="block"><h3>Madinah</h3>{hotelSelect("madinah", "madinahHotelId")}</div>
-              {error && <div className="error">{error}</div>}
-              <div className="actions">
-                <button type="button" className="btn ghost" onClick={() => setStep(0)}>← Back</button>
-                <button type="button" className="btn" onClick={() => setStep(2)}>Next: Dates →</button>
-              </div>
-            </div>
-          )}
-
-          {step === 2 && (
-            <div className="panel">
-              <h2>3. Dates</h2>
-              <p className="sub">How many nights in each city? We assume Makkah first, then Madinah.</p>
-              <div className="block">
-                <div className="nights">
-                  <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: 8 }}><Moon size={20} /> Makkah nights</h3>
-                  <Counter label="Makkah nights" value={form.makkahNights} onChange={set("makkahNights")} />
-                </div>
-              </div>
-              <div className="block">
-                <div className="nights">
-                  <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: 8 }}><Moon size={20} /> Madinah nights</h3>
-                  <Counter label="Madinah nights" value={form.madinahNights} onChange={set("madinahNights")} />
-                </div>
-              </div>
-              <ul className="route block">
-                <li><span>Makkah</span><b>{showDate(addDays(form.startDate, 0))} → {showDate(makkahOut)}</b></li>
-                <li><span>Madinah</span><b>{showDate(makkahOut)} → {showDate(madinahOut)}</b></li>
-                <li><span>Total nights</span><b>{form.makkahNights + form.madinahNights}</b></li>
-              </ul>
-              {error && <div className="error">{error}</div>}
-              <div className="actions">
-                <button type="button" className="btn ghost" onClick={() => setStep(1)}>← Back</button>
-                <button type="button" className="btn" onClick={() => setStep(3)}>Next: Request →</button>
-              </div>
-            </div>
-          )}
-
-          {step === 3 && (
-            <div className="panel">
-              <h2>4. Request a confirmed quote</h2>
-              <p className="sub">No payment now. Our team checks availability and contacts you.</p>
-
-              {sent ? (
-                <div className="done-box">
-                  <h3 style={{ fontSize: 28, margin: 0 }}>Jazakallahu khayran</h3>
-                  <p style={{ color: "var(--mute)", margin: "6px 0 0" }}>Your reference number</p>
-                  <div className="ref">{sent}</div>
-                  <p style={{ color: "var(--mute)", fontSize: 14 }}>
-                    Our team will send a confirmed quote once availability is checked.
-                    This is not yet a booking.
-                  </p>
-                  <div className="actions">
-                    <a className="btn gold" href={waLink} target="_blank" rel="noreferrer">
-                      <WhatsAppIcon size={18} /> Continue on WhatsApp
-                    </a>
-                  </div>
-                </div>
-              ) : (
-                <form onSubmit={submitLead}>
-                  <div className="field">
-                    <label className="lab">Your name</label>
-                    <input type="text" value={lead.name}
-                      onChange={(e) => setLead({ ...lead, name: e.target.value })} />
-                  </div>
-                  <div className="field">
-                    <label className="lab">WhatsApp / phone</label>
-                    <input type="text" placeholder="+92 300 1234567" value={lead.phone}
-                      onChange={(e) => setLead({ ...lead, phone: e.target.value })} />
-                  </div>
-                  <div className="field">
-                    <label className="lab">Note (optional)</label>
-                    <textarea rows={3} value={lead.note}
-                      onChange={(e) => setLead({ ...lead, note: e.target.value })} />
-                  </div>
-                  <label className="check">
-                    <input type="checkbox" checked={lead.consent}
-                      onChange={(e) => setLead({ ...lead, consent: e.target.checked })} />
-                    I agree to be contacted about this request by phone or WhatsApp.
-                  </label>
-                  {leadError && <div className="error">{leadError}</div>}
-                  <div className="actions">
-                    <button type="button" className="btn ghost" onClick={() => setStep(2)}>← Back</button>
-                    <button type="submit" className="btn gold" disabled={sending || !result}>
-                      {sending ? "Sending…" : "Request a confirmed quote"}
-                    </button>
-                  </div>
-                  <p className="secure"><Lock />Please do not send passport details here.</p>
-                </form>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* ---------- Estimate card ---------- */}
-        <aside className="estimate" id="estimate">
-          <div className="est-top">
-            <h3>Your Estimated Cost</h3>
-            <span className="pill">{busy ? "Updating" : "Estimate"}</span>
-          </div>
-
-          {!result ? (
-            <div className="est-empty">
-              Complete the journey steps to see your personalised estimate.
-              <div className="kaaba-art"><Kaaba /></div>
-            </div>
-          ) : (
-            <>
-              <div className="kaaba-art" style={{ width: 150 }}><Kaaba /></div>
-              <ul className="est-lines">
-                <li>
-                  <span><i className="ei"><Building2 /></i>Makkah{makkahHotel ? ` · ${makkahHotel.name}` : ""}</span>
-                  <span>{fmt(result.lineItems.find((i) => i.label === "Makkah hotel")?.sar ?? 0)} SAR</span>
-                </li>
-                <li>
-                  <span><i className="ei"><Building2 /></i>Madinah{madinahHotel ? ` · ${madinahHotel.name}` : ""}</span>
-                  <span>{fmt(result.lineItems.find((i) => i.label === "Madinah hotel")?.sar ?? 0)} SAR</span>
-                </li>
-                {feeAndPackage.map((i) => (
-                  <li key={i.label}>
-                    <span><i className="ei"><Package /></i>{i.label}</span>
-                    <span>{fmt(i.sar)} SAR</span>
-                  </li>
-                ))}
-                <li className="na">
-                  <span><i className="ei"><Plane /></i>Flights & other services</span>
-                  <span>Not included</span>
-                </li>
-              </ul>
-
-              <div className="total-lab">Estimated Total</div>
-              <div className={`total ${busy ? "dim" : ""}`}>
-                {fmt(result.totalPkr)} – {fmt(result.highPkr)} <small>PKR</small>
-              </div>
-              <div className="sar">
-                SAR {fmt(result.totalSar)} – {fmt(result.highSar)} · about PKR {fmt(result.perPersonPkr)} per traveller
-              </div>
-
-              {sent && (
-                <div className="stampbox"><small>Request received</small><strong>{sent}</strong></div>
-              )}
-
-              <details>
-                <summary>Assumptions</summary>
-                <ul>{result.assumptions.map((a) => <li key={a}>{a}</li>)}</ul>
-              </details>
-
-              <div className="note">
-                <Info />This is an estimate only, not a booking or guaranteed price. Valid until{" "}
-                {new Date(result.expiresAt).toLocaleString()}. Final price may vary based on
-                availability and confirmation.
-              </div>
-            </>
-          )}
-        </aside>
+      <SiteHeader page={page} waLink={waLink} />
+      <main id="main" className="wrap">
+        <Routes>
+          <Route path={APP_PATHS.home} element={homePage} />
+          <Route path={APP_PATHS.umrah} element={umrahWizard} />
+          <Route path={APP_PATHS.calculator} element={umrahWizard} />
+          <Route path={APP_PATHS.hajj} element={comingSoonPage} />
+          <Route path={APP_PATHS.tours} element={comingSoonPage} />
+          <Route path={APP_PATHS.flights} element={comingSoonPage} />
+          <Route path={APP_PATHS.visa} element={comingSoonPage} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
       </main>
-
-      <section className="trust" id="about">
-        <div className="tr"><i><Building2 /></i><span><b>Trusted Hotels</b>Prime locations in Makkah & Madinah</span></div>
-        <div className="tr"><i><ReceiptText /></i><span><b>Transparent Pricing</b>A clear breakdown, always a range</span></div>
-        <div className="tr"><i><FilePenLine /></i><span><b>Easy Request</b>Ask for a quotation in minutes</span></div>
-        <div className="tr"><i><Headset /></i><span><b>Real Support</b>Every request gets a reference number</span></div>
-      </section>
-
-      <a className="wa-float" href={waLink} target="_blank" rel="noreferrer" id="contact">
-        <WhatsAppIcon size={24} />
-        <span>Chat on WhatsApp<small>Get quick support</small></span>
-      </a>
-
-      {result && (
-        <div className="mobilebar">
-          <div>
-            <small>Estimate</small>
-            <strong>PKR {fmt(result.totalPkr)} – {fmt(result.highPkr)}</strong>
-          </div>
-          <a href="#estimate">Details</a>
-        </div>
-      )}
-
-      <p className="footer">Final prices and availability are confirmed in writing by our team.</p>
+      <p className="footer">Estimates only. Final prices and availability are confirmed in writing by our team.</p>
     </>
   );
 }

@@ -1,0 +1,36 @@
+import mongoose from "mongoose";
+
+const enquirySchema = new mongoose.Schema({
+  referenceNo: { type: String, unique: true },
+  name: { type: String, required: true },
+  phone: { type: String, required: true },
+  consent: { type: Boolean, required: true },
+  consentAt: Date,
+  destination: String,
+  tripType: String,
+  adults: Number,
+  children: Number,
+  infants: Number,
+  startDate: String,
+  nights: Number,
+  departureCity: String,
+  budgetPkr: String,
+  services: [String],
+  needs: [String],
+  note: String,
+  route: String,
+  routeText: String,
+  customRoute: String,
+  routeSegments: [{ city: String, visit: Number }],
+  transport: String,
+  roomType: String,
+  roomAllocations: [Number],
+  makkahNights: Number,
+  madinahNights: Number,
+  ziyarat: [String],
+  infantBed: String,
+  status: { type: String, default: "new" },
+  createdAt: { type: Date, default: Date.now },
+});
+
+export default mongoose.model("Enquiry", enquirySchema);
