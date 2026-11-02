@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import SiteHeader from "./components/SiteHeader.jsx";
-import HomePage from "./components/HomePage.jsx";
-import ComingSoonPage from "./components/ComingSoonPage.jsx";
-import UmrahWizard from "./components/UmrahWizard.jsx";
-import NotFoundPage from "./components/NotFoundPage.jsx";
-import { LeadForm, RequestConfirmation } from "./components/LeadForm.jsx";
+import SiteHeader from "./components/layout/SiteHeader.jsx";
+import HomePage from "./pages/HomePage.jsx";
+import ComingSoonPage from "./pages/ComingSoonPage.jsx";
+import UmrahWizard from "./features/calculator/components/UmrahWizard.jsx";
+import NotFoundPage from "./pages/NotFoundPage.jsx";
+import { LeadForm, RequestConfirmation } from "./components/forms/LeadForm.jsx";
 import {
-  API, EMPTY_HOTELS, FIRST_DAY, JSON_H, LAST_DAY, ROOM_NAME, ROUTES, TRANSPORTS, WHATSAPP_NUMBER,
+  EMPTY_HOTELS, FIRST_DAY, LAST_DAY, ROOM_NAME, ROUTES, TRANSPORTS, WHATSAPP_NUMBER,
 } from "./data/calculator.jsx";
-import { APP_PATHS, resolvePage } from "./routes.js";
-import { allocateRoomBeds, fmt, planStays, plural, showDate, validDate } from "./utils/travel.js";
+import {
+  calculatePackage, createEnquiry, createEstimatePdf, createLead, getHotels,
+} from "./features/calculator/services/calculatorApi.js";
+import { APP_PATHS, resolvePage } from "./routes/paths.js";
+import { allocateRoomBeds, fmt, planStays, plural, showDate, validDate } from "./features/calculator/utils/travel.js";
 
 export default function App() {
   const location = useLocation();
@@ -38,6 +41,7 @@ export default function App() {
     primaryRoomCount: 1,
     additionalRoomType: 4,
     startDate: "",
+    departureAirport: "",
     departureCity: "",
     transport: "bus",
     route: "",
@@ -127,13 +131,13 @@ export default function App() {
     if (!hotelRequestKey) return undefined;
     let cancelled = false;
     Promise.all([
-      fetch(`${API}/api/hotels?city=makkah&date=${makkahIn}`).then((response) => {
+      getHotels("makkah", makkahIn).then(({ response, data }) => {
         if (!response.ok) throw new Error("Could not load Makkah hotels.");
-        return response.json();
+        return data;
       }),
-      fetch(`${API}/api/hotels?city=madinah&date=${madinahIn}`).then((response) => {
+      getHotels("madinah", madinahIn).then(({ response, data }) => {
         if (!response.ok) throw new Error("Could not load Madinah hotels.");
-        return response.json();
+        return data;
       }),
     ])
       .then(([makkahHotels, madinahHotels]) => {
@@ -179,11 +183,12 @@ export default function App() {
     plan && inRange && form.route && form.roomType && form.makkahHotelId && form.madinahHotelId &&
     form.infants <= form.adults
   );
-  const estimatePayload = JSON.stringify({
+  const estimateRequest = {
     ...form,
     ...(form.roomType !== "sharing" ? { roomAllocations } : {}),
     preview: true,
-  });
+  };
+  const estimatePayload = JSON.stringify(estimateRequest);
   const currentEstimate = canCalculate && estimate.key === estimatePayload ? estimate : null;
   const result = currentEstimate?.result ?? null;
   const calcError = currentEstimate?.error ?? "";
@@ -194,12 +199,7 @@ export default function App() {
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
-        const response = await fetch(`${API}/api/calculate`, {
-          method: "POST",
-          headers: JSON_H,
-          body: estimatePayload,
-        });
-        const data = await response.json();
+        const { response, data } = await calculatePackage(JSON.parse(estimatePayload));
         if (cancelled) return;
         setEstimate({
           key: estimatePayload,
@@ -235,7 +235,7 @@ export default function App() {
         errors.children = "Enter between 0 and 30 children.";
       }
       if ((form.infants > 0 || form.children > 0) && !form.infantBed) {
-        errors.infantBed = "Choose whether infants and children need a separate mattress.";
+        errors.infantBed = "Choose whether infants and children need a separate bed.";
       }
       if (!form.roomType) errors.roomType = "Select a room type to continue.";
       if (!validDate(form.startDate)) errors.date = "Choose your arrival date.";
@@ -293,16 +293,10 @@ export default function App() {
     setPdfBusy(true);
     setPdfError("");
     try {
-      const response = await fetch(`${API}/api/estimate-pdf`, {
-        method: "POST",
-        headers: JSON_H,
-        body: JSON.stringify({ ...form, roomAllocations, routeText: route.text, referenceNo: sent }),
+      const blob = await createEstimatePdf({
+        ...form, roomAllocations, routeText: route.text, referenceNo: sent,
       });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || "Could not create the PDF.");
-      }
-      const url = URL.createObjectURL(await response.blob());
+      const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = "umrah-estimate.pdf";
@@ -329,6 +323,7 @@ export default function App() {
     setSending(true);
     try {
       let response;
+      let data;
       if (quoteOnly) {
         const note = [
           `Route: ${route.text}`,
@@ -336,7 +331,7 @@ export default function App() {
           `Room preference: ${ROOM_NAME[form.roomType] || "Not selected"}`,
           form.children > 2 && "More than two children: an additional room is required.",
           roomAllocations.length > 0 && `Room allocation: ${roomAllocations.join(" + ")} bed(s) per room`,
-          `Infant/child mattress: ${form.infants + form.children === 0 ? "Not applicable" : form.infantBed === "required" ? "Required" : form.infantBed === "none" ? "Not required" : "Preference not selected"}`,
+          `Infant/child bed: ${form.infants + form.children === 0 ? "Not applicable" : form.infantBed === "required" ? "Required" : form.infantBed === "none" ? "Not required" : "Preference not selected"}`,
           `Makkah: ${form.makkahNights} total night(s)${form.route === "route3" || form.route === "route4" ? "; nights per visit to be confirmed" : ""}`,
           `Madinah: ${form.madinahNights} night(s)`,
           `Ziyarat requested: ${form.ziyarat.length ? form.ziyarat.join(", ") : "None"}`,
@@ -344,55 +339,46 @@ export default function App() {
           `Madinah hotel: ${nameOf("madinah") || "Not selected"}`,
           lead.note,
         ].filter(Boolean).join("\n");
-        response = await fetch(`${API}/api/enquiries`, {
-          method: "POST",
-          headers: JSON_H,
-          body: JSON.stringify({
-            ...lead,
-            destination: "Umrah package",
-            tripType: "Umrah",
-            adults: form.adults,
-            children: form.children,
-            infants: form.infants,
-            startDate: form.startDate,
-            nights: form.makkahNights + form.madinahNights,
-            departureCity: form.departureCity,
-            services: ["Hotels", "Visa assistance", "Ground transport"],
-            route: form.route,
-            routeText: route.text,
-            customRoute: form.customRoute,
-            routeSegments: ROUTES[form.route].order.map((city, index) => ({ city, visit: index + 1 })),
-            transport: form.transport,
-            roomType: form.roomType,
-            roomAllocations,
-            makkahNights: form.makkahNights,
-            madinahNights: form.madinahNights,
-            ziyarat: form.ziyarat,
-            infantBed: form.infants > 0 || form.children > 0 ? form.infantBed : "none",
-            note,
-          }),
+        const request = await createEnquiry({
+          ...lead,
+          destination: "Umrah package",
+          tripType: "Umrah",
+          adults: form.adults,
+          children: form.children,
+          infants: form.infants,
+          startDate: form.startDate,
+          nights: form.makkahNights + form.madinahNights,
+          departureCity: form.departureCity,
+          services: ["Hotels", "Visa assistance", "Ground transport"],
+          route: form.route,
+          routeText: route.text,
+          customRoute: form.customRoute,
+          routeSegments: ROUTES[form.route].order.map((city, index) => ({ city, visit: index + 1 })),
+          transport: form.transport,
+          roomType: form.roomType,
+          roomAllocations,
+          makkahNights: form.makkahNights,
+          madinahNights: form.madinahNights,
+          ziyarat: form.ziyarat,
+          infantBed: form.infants > 0 || form.children > 0 ? form.infantBed : "none",
+          note,
         });
+        response = request.response;
+        data = request.data;
       } else {
-        const calculation = await fetch(`${API}/api/calculate`, {
-          method: "POST",
-          headers: JSON_H,
-          body: JSON.stringify({
-            ...form,
-            ...(form.roomType !== "sharing" ? { roomAllocations } : {}),
-          }),
+        const request = await calculatePackage({
+          ...form,
+          ...(form.roomType !== "sharing" ? { roomAllocations } : {}),
         });
-        const saved = await calculation.json();
-        if (!calculation.ok) {
+        const saved = request.data;
+        if (!request.response.ok) {
           setLeadError(saved.error || "Something went wrong");
           return;
         }
-        response = await fetch(`${API}/api/leads`, {
-          method: "POST",
-          headers: JSON_H,
-          body: JSON.stringify({ ...lead, snapshotId: saved.snapshotId }),
-        });
+        const leadRequest = await createLead({ ...lead, snapshotId: saved.snapshotId });
+        response = leadRequest.response;
+        data = leadRequest.data;
       }
-      const data = await response.json();
       if (!response.ok) {
         setLeadError(data.error || "Something went wrong");
         return;

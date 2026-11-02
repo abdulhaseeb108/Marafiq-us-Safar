@@ -2,9 +2,7 @@ import {
   Users, Route as RouteIcon, Building2, Bus, Car, ScrollText, Moon, Compass, FileText, Plane,
 } from "lucide-react";
 
-export const API = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
 export const WHATSAPP_NUMBER = "923000000000";
-export const JSON_H = { "Content-Type": "application/json" };
 export const EMPTY_HOTELS = { makkah: [], madinah: [] };
 export const FIRST_DAY = "2026-10-06";
 export const LAST_DAY = "2027-01-31";
@@ -26,6 +24,45 @@ export const ROOMS = [
   [5, "Quint", "5 per room · rate on request"],
 ];
 export const ROOM_NAME = { sharing: "Sharing", 1: "Private", 2: "Double", 3: "Triple", 4: "Quad", 5: "Quint" };
+export const DEPARTURE_AIRPORTS = [
+  { city: "Karachi", iata: "KHI" },
+  { city: "Lahore", iata: "LHE" },
+  { city: "Islamabad", iata: "ISB" },
+  { city: "Rawalpindi", iata: "ISB" },
+  { city: "Peshawar", iata: "PEW" },
+  { city: "Quetta", iata: "UET" },
+  { city: "Multan", iata: "MUX" },
+  { city: "Faisalabad", iata: "LYP" },
+  { city: "Sialkot", iata: "SKT" },
+  { city: "Bahawalpur", iata: "BHV" },
+  { city: "Rahim Yar Khan", iata: "RYK" },
+  { city: "Dera Ghazi Khan", iata: "DEA" },
+  { city: "Dera Ismail Khan", iata: "DSK" },
+  { city: "Sukkur", iata: "SKZ" },
+  { city: "Nawabshah", iata: "WNS" },
+  { city: "Mohenjo-daro", iata: "MJD" },
+  { city: "Hyderabad", iata: "HDD" },
+  { city: "Gwadar", iata: "GWD" },
+  { city: "Turbat", iata: "TUK" },
+  { city: "Panjgur", iata: "PJG" },
+  { city: "Pasni", iata: "PSI" },
+  { city: "Ormara", iata: "ORW" },
+  { city: "Zhob", iata: "ZZB" },
+  { city: "Sibi", iata: "SBK" },
+  { city: "Dalbandin", iata: "DBA" },
+  { city: "Skardu", iata: "KDU" },
+  { city: "Gilgit", iata: "GIL" },
+  { city: "Chitral", iata: "CJL" },
+  { city: "Chilas", iata: "CHB" },
+  { city: "Bannu", iata: "BNP" },
+  { city: "Parachinar", iata: "PAJ" },
+  { city: "Kohat", iata: "OHT" },
+  { city: "Muzaffarabad", iata: "MFG" },
+  { city: "Rawalakot", iata: "RAZ" },
+  { city: "Mangla", iata: "XJM" },
+  { city: "Tarbela", iata: "TLB" },
+  { city: "Jiwani", iata: "JIW" },
+].sort((a, b) => a.city.localeCompare(b.city));
 export const DEPARTURE_CITIES = [
   "Abbottabad", "Ahmadpur East", "Akora Khattak", "Arifwala", "Astore", "Attock",
   "Awaran", "Badin", "Bagh", "Bahawalnagar", "Bahawalpur", "Bannu", "Barkhan",

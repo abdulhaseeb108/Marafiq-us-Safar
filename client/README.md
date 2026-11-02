@@ -1,5 +1,7 @@
 # Marafiq us Safar client
 
+For whole-project setup, server architecture, API contracts, environment variables, and database relationships, see the [project README](../README.md) and its linked documentation.
+
 The client is a React single-page application using React Router for shareable URLs and browser history.
 
 ## Routes
